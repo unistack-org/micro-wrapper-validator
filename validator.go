@@ -3,15 +3,15 @@ package validator
 import (
 	"context"
 
-	"github.com/micro/go-micro/v2/errors"
-	"github.com/micro/go-micro/v2/server"
+	"github.com/unistack-org/micro/v3/errors"
+	"github.com/unistack-org/micro/v3/server"
 )
 
 type Validator interface {
 	Validate() error
 }
 
-func NewHandlerWrapper() server.HandlerWrapper {
+func NewServerHandlerWrapper() server.HandlerWrapper {
 	return func(fn server.HandlerFunc) server.HandlerFunc {
 		return func(ctx context.Context, req server.Request, rsp interface{}) error {
 			if v, ok := req.Body().(Validator); ok {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/unistack-org/micro/v3/client"
-	"github.com/unistack-org/micro/v3/codec"
-	"github.com/unistack-org/micro/v3/server"
+	"go.unistack.org/micro/v3/client"
+	"go.unistack.org/micro/v3/codec"
+	"go.unistack.org/micro/v3/server"
 )
 
 type Handler struct {
@@ -76,5 +76,4 @@ func TestValidator(t *testing.T) {
 	if err := srv.Stop(); err != nil {
 		t.Fatal(err)
 	}
-
 }

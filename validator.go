@@ -9,11 +9,17 @@ import (
 )
 
 var (
-	DefaultClientErrorFunc = func(req client.Request, err error) error {
+	DefaultClientErrorFunc = func(req client.Request, rsp interface{}, err error) error {
+		if rsp != nil {
+			return errors.BadGateway(req.Service(), "%v", err)
+		}
 		return errors.BadRequest(req.Service(), "%v", err)
 	}
 
-	DefaultServerErrorFunc = func(req server.Request, err error) error {
+	DefaultServerErrorFunc = func(req server.Request, rsp interface{}, err error) error {
+		if rsp != nil {
+			return errors.BadGateway(req.Service(), "%v", err)
+		}
 		return errors.BadRequest(req.Service(), "%v", err)
 	}
 
@@ -27,8 +33,8 @@ var (
 )
 
 type (
-	ClientErrorFunc    func(client.Request, error) error
-	ServerErrorFunc    func(server.Request, error) error
+	ClientErrorFunc    func(client.Request, interface{}, error) error
+	ServerErrorFunc    func(server.Request, interface{}, error) error
 	PublishErrorFunc   func(client.Message, error) error
 	SubscribeErrorFunc func(server.Message, error) error
 )
@@ -44,7 +50,7 @@ type Options struct {
 // Option func signature
 type Option func(*Options)
 
-func ClientErrorFn(fn ClientErrorFunc) Option {
+func ClientReqErrorFn(fn ClientErrorFunc) Option {
 	return func(o *Options) {
 		o.ClientErrorFn = fn
 	}
@@ -105,11 +111,17 @@ func NewClientCallWrapper(opts ...Option) client.CallWrapper {
 	return func(fn client.CallFunc) client.CallFunc {
 		return func(ctx context.Context, addr string, req client.Request, rsp interface{}, opts client.CallOptions) error {
 			if v, ok := req.Body().(validator); ok {
-				if err := v.Validate(); err != nil {
-					return options.ClientErrorFn(req, err)
+				if verr := v.Validate(); verr != nil {
+					return options.ClientErrorFn(req, nil, verr)
 				}
 			}
-			return fn(ctx, addr, req, rsp, opts)
+			err := fn(ctx, addr, req, rsp, opts)
+			if v, ok := rsp.(validator); ok {
+				if verr := v.Validate(); verr != nil {
+					return options.ClientErrorFn(req, rsp, verr)
+				}
+			}
+			return err
 		}
 	}
 }
@@ -117,16 +129,22 @@ func NewClientCallWrapper(opts ...Option) client.CallWrapper {
 func (w *wrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
 	if v, ok := req.Body().(validator); ok {
 		if err := v.Validate(); err != nil {
-			return w.opts.ClientErrorFn(req, err)
+			return w.opts.ClientErrorFn(req, nil, err)
 		}
 	}
-	return w.Client.Call(ctx, req, rsp, opts...)
+	err := w.Client.Call(ctx, req, rsp, opts...)
+	if v, ok := rsp.(validator); ok {
+		if verr := v.Validate(); verr != nil {
+			return w.opts.ClientErrorFn(req, rsp, verr)
+		}
+	}
+	return err
 }
 
 func (w *wrapper) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
 	if v, ok := req.Body().(validator); ok {
 		if err := v.Validate(); err != nil {
-			return nil, w.opts.ClientErrorFn(req, err)
+			return nil, w.opts.ClientErrorFn(req, nil, err)
 		}
 	}
 	return w.Client.Stream(ctx, req, opts...)
@@ -147,10 +165,16 @@ func NewServerHandlerWrapper(opts ...Option) server.HandlerWrapper {
 		return func(ctx context.Context, req server.Request, rsp interface{}) error {
 			if v, ok := req.Body().(validator); ok {
 				if err := v.Validate(); err != nil {
-					return options.ClientErrorFn(req, err)
+					return options.ClientErrorFn(req, nil, err)
 				}
 			}
-			return fn(ctx, req, rsp)
+			err := fn(ctx, req, rsp)
+			if v, ok := rsp.(validator); ok {
+				if verr := v.Validate(); verr != nil {
+					return options.ClientErrorFn(req, rsp, err)
+				}
+			}
+			return err
 		}
 	}
 }

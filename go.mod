@@ -2,7 +2,7 @@ module go.unistack.org/micro-wrapper-validator/v3
 
 go 1.17
 
-require go.unistack.org/micro/v3 v3.10.32
+require go.unistack.org/micro/v3 v3.10.33
 
 require (
 	github.com/golang/protobuf v1.5.3 // indirect

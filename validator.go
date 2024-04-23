@@ -41,14 +41,28 @@ type (
 
 // Options struct holds wrapper options
 type Options struct {
-	ClientErrorFn    ClientErrorFunc
-	ServerErrorFn    ServerErrorFunc
-	PublishErrorFn   PublishErrorFunc
-	SubscribeErrorFn SubscribeErrorFunc
+	ClientErrorFn          ClientErrorFunc
+	ServerErrorFn          ServerErrorFunc
+	PublishErrorFn         PublishErrorFunc
+	SubscribeErrorFn       SubscribeErrorFunc
+	ClientValidateResponse bool
+	ServerValidateResponse bool
 }
 
 // Option func signature
 type Option func(*Options)
+
+func ClientValidateResponse(b bool) Option {
+	return func(o *Options) {
+		o.ClientValidateResponse = b
+	}
+}
+
+func ServerValidateResponse(b bool) Option {
+	return func(o *Options) {
+		o.ClientValidateResponse = b
+	}
+}
 
 func ClientReqErrorFn(fn ClientErrorFunc) Option {
 	return func(o *Options) {
@@ -87,108 +101,94 @@ func NewOptions(opts ...Option) Options {
 	return options
 }
 
+func NewHook(opts ...Option) *hook {
+	return &hook{opts: NewOptions(opts...)}
+}
+
 type validator interface {
 	Validate() error
 }
 
-type wrapper struct {
-	client.Client
+type hook struct {
 	opts Options
 }
 
-func NewClientWrapper(opts ...Option) client.Wrapper {
-	return func(c client.Client) client.Client {
-		handler := &wrapper{
-			Client: c,
-			opts:   NewOptions(opts...),
-		}
-		return handler
-	}
-}
-
-func NewClientCallWrapper(opts ...Option) client.CallWrapper {
-	options := NewOptions(opts...)
-	return func(fn client.CallFunc) client.CallFunc {
-		return func(ctx context.Context, addr string, req client.Request, rsp interface{}, opts client.CallOptions) error {
-			if v, ok := req.Body().(validator); ok {
-				if verr := v.Validate(); verr != nil {
-					return options.ClientErrorFn(req, nil, verr)
-				}
+func (w *hook) ClientCall(next client.FuncCall) client.FuncCall {
+	return func(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
+		if v, ok := req.Body().(validator); ok {
+			if err := v.Validate(); err != nil {
+				return w.opts.ClientErrorFn(req, nil, err)
 			}
-			err := fn(ctx, addr, req, rsp, opts)
-			if v, ok := rsp.(validator); ok {
-				if verr := v.Validate(); verr != nil {
-					return options.ClientErrorFn(req, rsp, verr)
-				}
+		}
+		err := next(ctx, req, rsp, opts...)
+		if v, ok := rsp.(validator); ok && w.opts.ClientValidateResponse {
+			if verr := v.Validate(); verr != nil {
+				return w.opts.ClientErrorFn(req, rsp, verr)
 			}
-			return err
 		}
+		return err
 	}
 }
 
-func (w *wrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
-	if v, ok := req.Body().(validator); ok {
-		if err := v.Validate(); err != nil {
-			return w.opts.ClientErrorFn(req, nil, err)
+func (w *hook) ClientStream(next client.FuncStream) client.FuncStream {
+	return func(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
+		if v, ok := req.Body().(validator); ok {
+			if err := v.Validate(); err != nil {
+				return nil, w.opts.ClientErrorFn(req, nil, err)
+			}
 		}
+		return next(ctx, req, opts...)
 	}
-	err := w.Client.Call(ctx, req, rsp, opts...)
-	if v, ok := rsp.(validator); ok {
-		if verr := v.Validate(); verr != nil {
-			return w.opts.ClientErrorFn(req, rsp, verr)
-		}
-	}
-	return err
 }
 
-func (w *wrapper) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
-	if v, ok := req.Body().(validator); ok {
-		if err := v.Validate(); err != nil {
-			return nil, w.opts.ClientErrorFn(req, nil, err)
+func (w *hook) ClientPublish(next client.FuncPublish) client.FuncPublish {
+	return func(ctx context.Context, msg client.Message, opts ...client.PublishOption) error {
+		if v, ok := msg.Payload().(validator); ok {
+			if err := v.Validate(); err != nil {
+				return w.opts.PublishErrorFn(msg, err)
+			}
 		}
+		return next(ctx, msg, opts...)
 	}
-	return w.Client.Stream(ctx, req, opts...)
 }
 
-func (w *wrapper) Publish(ctx context.Context, msg client.Message, opts ...client.PublishOption) error {
-	if v, ok := msg.Payload().(validator); ok {
-		if err := v.Validate(); err != nil {
-			return w.opts.PublishErrorFn(msg, err)
-		}
-	}
-	return w.Client.Publish(ctx, msg, opts...)
-}
-
-func NewServerHandlerWrapper(opts ...Option) server.HandlerWrapper {
-	options := NewOptions(opts...)
-	return func(fn server.HandlerFunc) server.HandlerFunc {
-		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-			if v, ok := req.Body().(validator); ok {
+func (w *hook) ClientBatchPublish(next client.FuncBatchPublish) client.FuncBatchPublish {
+	return func(ctx context.Context, msgs []client.Message, opts ...client.PublishOption) error {
+		for _, msg := range msgs {
+			if v, ok := msg.Payload().(validator); ok {
 				if err := v.Validate(); err != nil {
-					return options.ClientErrorFn(req, nil, err)
+					return w.opts.PublishErrorFn(msg, err)
 				}
 			}
-			err := fn(ctx, req, rsp)
-			if v, ok := rsp.(validator); ok {
-				if verr := v.Validate(); verr != nil {
-					return options.ClientErrorFn(req, rsp, err)
-				}
-			}
-			return err
 		}
+		return next(ctx, msgs, opts...)
 	}
 }
 
-func NewServerSubscriberWrapper(opts ...Option) server.SubscriberWrapper {
-	options := NewOptions(opts...)
-	return func(fn server.SubscriberFunc) server.SubscriberFunc {
-		return func(ctx context.Context, msg server.Message) error {
-			if v, ok := msg.Body().(validator); ok {
-				if err := v.Validate(); err != nil {
-					return options.SubscribeErrorFn(msg, err)
-				}
+func (w *hook) ServerHandler(next server.FuncHandler) server.FuncHandler {
+	return func(ctx context.Context, req server.Request, rsp interface{}) error {
+		if v, ok := req.Body().(validator); ok {
+			if err := v.Validate(); err != nil {
+				return w.opts.ServerErrorFn(req, nil, err)
 			}
-			return fn(ctx, msg)
 		}
+		err := next(ctx, req, rsp)
+		if v, ok := rsp.(validator); ok && w.opts.ServerValidateResponse {
+			if verr := v.Validate(); verr != nil {
+				return w.opts.ServerErrorFn(req, rsp, verr)
+			}
+		}
+		return err
+	}
+}
+
+func (w *hook) ServerSubscriber(next server.FuncSubHandler) server.FuncSubHandler {
+	return func(ctx context.Context, msg server.Message) error {
+		if v, ok := msg.Body().(validator); ok {
+			if err := v.Validate(); err != nil {
+				return w.opts.SubscribeErrorFn(msg, err)
+			}
+		}
+		return next(ctx, msg)
 	}
 }

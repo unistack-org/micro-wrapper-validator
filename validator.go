@@ -3,9 +3,9 @@ package validator
 import (
 	"context"
 
-	"go.unistack.org/micro/v3/client"
-	"go.unistack.org/micro/v3/errors"
-	"go.unistack.org/micro/v3/server"
+	"go.unistack.org/micro/v4/client"
+	"go.unistack.org/micro/v4/errors"
+	"go.unistack.org/micro/v4/server"
 )
 
 var (
@@ -22,21 +22,11 @@ var (
 		}
 		return errors.BadRequest(req.Service(), "%v", err)
 	}
-
-	DefaultPublishErrorFunc = func(msg client.Message, err error) error {
-		return errors.BadRequest(msg.Topic(), "%v", err)
-	}
-
-	DefaultSubscribeErrorFunc = func(msg server.Message, err error) error {
-		return errors.BadRequest(msg.Topic(), "%v", err)
-	}
 )
 
 type (
-	ClientErrorFunc    func(client.Request, interface{}, error) error
-	ServerErrorFunc    func(server.Request, interface{}, error) error
-	PublishErrorFunc   func(client.Message, error) error
-	SubscribeErrorFunc func(server.Message, error) error
+	ClientErrorFunc func(client.Request, interface{}, error) error
+	ServerErrorFunc func(server.Request, interface{}, error) error
 )
 
 // Options struct holds wrapper options
@@ -76,24 +66,10 @@ func ServerErrorFn(fn ServerErrorFunc) Option {
 	}
 }
 
-func PublishErrorFn(fn PublishErrorFunc) Option {
-	return func(o *Options) {
-		o.PublishErrorFn = fn
-	}
-}
-
-func SubscribeErrorFn(fn SubscribeErrorFunc) Option {
-	return func(o *Options) {
-		o.SubscribeErrorFn = fn
-	}
-}
-
 func NewOptions(opts ...Option) Options {
 	options := Options{
-		ClientErrorFn:    DefaultClientErrorFunc,
-		ServerErrorFn:    DefaultServerErrorFunc,
-		PublishErrorFn:   DefaultPublishErrorFunc,
-		SubscribeErrorFn: DefaultSubscribeErrorFunc,
+		ClientErrorFn: DefaultClientErrorFunc,
+		ServerErrorFn: DefaultServerErrorFunc,
 	}
 	for _, o := range opts {
 		o(&options)
@@ -141,30 +117,6 @@ func (w *hook) ClientStream(next client.FuncStream) client.FuncStream {
 	}
 }
 
-func (w *hook) ClientPublish(next client.FuncPublish) client.FuncPublish {
-	return func(ctx context.Context, msg client.Message, opts ...client.PublishOption) error {
-		if v, ok := msg.Payload().(validator); ok {
-			if err := v.Validate(); err != nil {
-				return w.opts.PublishErrorFn(msg, err)
-			}
-		}
-		return next(ctx, msg, opts...)
-	}
-}
-
-func (w *hook) ClientBatchPublish(next client.FuncBatchPublish) client.FuncBatchPublish {
-	return func(ctx context.Context, msgs []client.Message, opts ...client.PublishOption) error {
-		for _, msg := range msgs {
-			if v, ok := msg.Payload().(validator); ok {
-				if err := v.Validate(); err != nil {
-					return w.opts.PublishErrorFn(msg, err)
-				}
-			}
-		}
-		return next(ctx, msgs, opts...)
-	}
-}
-
 func (w *hook) ServerHandler(next server.FuncHandler) server.FuncHandler {
 	return func(ctx context.Context, req server.Request, rsp interface{}) error {
 		if v, ok := req.Body().(validator); ok {
@@ -179,16 +131,5 @@ func (w *hook) ServerHandler(next server.FuncHandler) server.FuncHandler {
 			}
 		}
 		return err
-	}
-}
-
-func (w *hook) ServerSubscriber(next server.FuncSubHandler) server.FuncSubHandler {
-	return func(ctx context.Context, msg server.Message) error {
-		if v, ok := msg.Body().(validator); ok {
-			if err := v.Validate(); err != nil {
-				return w.opts.SubscribeErrorFn(msg, err)
-			}
-		}
-		return next(ctx, msg)
 	}
 }
